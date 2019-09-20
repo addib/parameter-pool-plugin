@@ -2,27 +2,21 @@ package org.jenkinsci.plugins.parameterpool;
 import hudson.EnvVars;
 import hudson.Launcher;
 import hudson.Extension;
+import hudson.FilePath;
 import hudson.Util;
-import hudson.model.AutoCompletionCandidates;
-import hudson.model.EnvironmentContributingAction;
-import hudson.model.Item;
-import hudson.model.ItemGroup;
-import hudson.model.Job;
-import hudson.model.Result;
-import hudson.model.Run;
 import hudson.util.FormValidation;
-import hudson.model.AbstractBuild;
-import hudson.model.BuildListener;
-import hudson.model.AbstractProject;
+import hudson.model.*;
 import hudson.tasks.Builder;
 import hudson.tasks.BuildStepDescriptor;
 import jenkins.model.Jenkins;
+import jenkins.tasks.SimpleBuildStep;
 import org.apache.commons.lang.StringUtils;
 import org.kohsuke.stapler.AncestorInPath;
 import org.kohsuke.stapler.DataBoundConstructor;
 import org.kohsuke.stapler.StaplerRequest;
 import org.kohsuke.stapler.QueryParameter;
 
+import javax.annotation.Nonnull;
 import javax.servlet.ServletException;
 import java.io.IOException;
 import java.io.PrintStream;
@@ -39,7 +33,7 @@ import java.util.StringTokenizer;
 /**
  * Builder for parameter pool values.
  */
-public class ParameterPoolBuilder extends Builder {
+public class ParameterPoolBuilder extends Builder implements SimpleBuildStep {
 
     private final String projects;
 
@@ -49,7 +43,8 @@ public class ParameterPoolBuilder extends Builder {
 
     private final boolean preferError;
 
-    // Fields in config.jelly must match the parameter names in the "DataBoundConstructor"
+    // Fields in config.jelly must match the parameter names in the
+    // "DataBoundConstructor"
     @DataBoundConstructor
     public ParameterPoolBuilder(String projects, String name, String values, boolean preferError) {
         this.projects = projects;
@@ -75,19 +70,19 @@ public class ParameterPoolBuilder extends Builder {
     }
 
     @Override
-    public boolean perform(AbstractBuild build, Launcher launcher, BuildListener listener) throws IOException,
-            InterruptedException {
+    public void perform(@Nonnull Run<?, ?> build, @Nonnull FilePath workspace, @Nonnull Launcher launcher,
+            @Nonnull TaskListener listener) throws IOException, InterruptedException {
         EnvVars env = build.getEnvironment(listener);
-        List<AbstractProject> projectsToUse = new ArrayList<AbstractProject>();
+        List<Job> projectsToUse = new ArrayList<Job>();
         if (StringUtils.isBlank(projects)) {
-            projectsToUse.add(build.getProject());
+            projectsToUse.add(build.getParent());
         } else {
             String expandedProjects = env.expand(projects);
             for (String potentialName : expandedProjects.split(",")) {
                 if (potentialName.trim().isEmpty()) {
                     continue;
                 }
-                AbstractProject matchingProject = AbstractProject.findNearest(potentialName);
+                Job matchingProject = AbstractProject.findNearest(potentialName);
                 if (matchingProject == null) {
                     throw new IllegalArgumentException("Project name " + potentialName + " was not found!");
                 }
@@ -98,7 +93,7 @@ public class ParameterPoolBuilder extends Builder {
         PrintStream logger = listener.getLogger();
 
         List<Run> builds = new ArrayList<Run>();
-        for (AbstractProject project : projectsToUse) {
+        for (Job project : projectsToUse) {
             logger.println("Checking project(s) " + project.getName() + " for parameter pool values");
             builds.addAll(project.getBuilds());
         }
@@ -122,11 +117,10 @@ public class ParameterPoolBuilder extends Builder {
         logger.println("Parsed following values from input text " + expandedValues);
         logger.println(parameterParser.valuesAsText());
 
-
         PoolValueSelector valueSelector = new PoolValueSelector();
 
-        String selectedPoolValue = valueSelector.selectPoolValue(expandedName, preferError,
-                build.getFullDisplayName(), builds, logger, parameterParser.getValues());
+        String selectedPoolValue = valueSelector.selectPoolValue(expandedName, preferError, build.getFullDisplayName(),
+                builds, logger, parameterParser.getValues());
 
         logger.println("Adding " + expandedName + " as environment variable with value of " + selectedPoolValue);
 
@@ -135,28 +129,26 @@ public class ParameterPoolBuilder extends Builder {
 
         build.addAction(envAction);
 
-        return true;
+        return;
     }
 
     @Override
     public DescriptorImpl getDescriptor() {
-        return (DescriptorImpl)super.getDescriptor();
+        return (DescriptorImpl) super.getDescriptor();
     }
-
 
     @Extension
     public static final class DescriptorImpl extends BuildStepDescriptor<Builder> {
 
         /**
-         * In order to load the persisted global configuration, you have to
-         * call load() in the constructor.
+         * In order to load the persisted global configuration, you have to call load()
+         * in the constructor.
          */
         public DescriptorImpl() {
             load();
         }
 
-        public FormValidation doCheckName(@QueryParameter String value)
-                throws IOException, ServletException {
+        public FormValidation doCheckName(@QueryParameter String value) throws IOException, ServletException {
             if (value.length() == 0)
                 return FormValidation.error("Please set a parameter name");
             if (value.length() < 2)
@@ -164,34 +156,35 @@ public class ParameterPoolBuilder extends Builder {
             return FormValidation.ok();
         }
 
-        public FormValidation doCheckValues(@QueryParameter String value)
-                throws IOException, ServletException {
+        public FormValidation doCheckValues(@QueryParameter String value) throws IOException, ServletException {
             if (value.length() == 0)
                 return FormValidation.error("Please set parameter values");
             return FormValidation.ok();
         }
 
         /**
-         * Checks that the project names entered are valid.
-         * Blank means that the current project name is used.
+         * Checks that the project names entered are valid. Blank means that the current
+         * project name is used.
          */
-        public FormValidation doCheckProjects(@AncestorInPath AbstractProject<?,?> project, @QueryParameter String value ) {
+        public FormValidation doCheckProjects(@AncestorInPath Job<?, ?> project,
+                @QueryParameter String value) {
             // Require CONFIGURE permission on this project
-            if(!project.hasPermission(Item.CONFIGURE)){
+            if (!project.hasPermission(Item.CONFIGURE)) {
                 return FormValidation.ok();
             }
-            StringTokenizer tokens = new StringTokenizer(Util.fixNull(value),",");
-            while(tokens.hasMoreTokens()) {
+            StringTokenizer tokens = new StringTokenizer(Util.fixNull(value), ",");
+            while (tokens.hasMoreTokens()) {
                 String projectName = tokens.nextToken().trim();
                 if (StringUtils.isBlank(projectName)) {
                     continue;
                 }
-                Item item = Jenkins.getInstance().getItem(projectName,project,Item.class); // only works after version 1.410
-                if(item==null){
+                Item item = Jenkins.getInstance().getItem(projectName, project, Item.class); // only works after version
+                                                                                             // 1.410
+                if (item == null) {
                     return FormValidation.error("Project name " + projectName + " not found, did you mean "
-                            + AbstractProject.findNearest(projectName).getName());
+                            + Job.findNearest(projectName).getName());
                 }
-                if(!(item instanceof AbstractProject)){
+                if (!(item instanceof Job)) {
                     return FormValidation.error("Project " + projectName + " is not buildable");
                 }
             }
@@ -201,10 +194,11 @@ public class ParameterPoolBuilder extends Builder {
         /**
          * Autocompletes project names
          */
-        public AutoCompletionCandidates doAutoCompleteProjects(@QueryParameter String value, @AncestorInPath ItemGroup context) {
+        public AutoCompletionCandidates doAutoCompleteProjects(@QueryParameter String value,
+                @AncestorInPath ItemGroup context) {
             AutoCompletionCandidates candidates = new AutoCompletionCandidates();
             List<Job> jobs = Jenkins.getInstance().getAllItems(Job.class);
-            for (Job job: jobs) {
+            for (Job job : jobs) {
                 String relativeName = job.getRelativeNameFrom(context);
                 if (relativeName.startsWith(value)) {
                     if (job.hasPermission(Item.READ)) {
@@ -215,7 +209,7 @@ public class ParameterPoolBuilder extends Builder {
             return candidates;
         }
 
-        public boolean isApplicable(Class<? extends AbstractProject> aClass) {
+        public boolean isApplicable(Class<? extends Job> aClass) {
             // Indicates that this builder can be used with all kinds of project types
             return true;
         }

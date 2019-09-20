@@ -1,8 +1,8 @@
 package org.jenkinsci.plugins.parameterpool;
 
 import hudson.EnvVars;
-import hudson.model.AbstractBuild;
-import hudson.model.EnvironmentContributingAction;
+import hudson.model.Action;
+import hudson.model.Run;
 
 import java.util.HashMap;
 import java.util.HashSet;
@@ -12,7 +12,7 @@ import java.util.Set;
 /**
  * Represents an action for adding an environmental variable for a parameter.
  */
-public class ParameterEnvAction implements EnvironmentContributingAction {
+public class ParameterEnvAction implements Action {
 
     private Map<String,String> data = new HashMap<String,String>();
 
@@ -21,7 +21,7 @@ public class ParameterEnvAction implements EnvironmentContributingAction {
         data.put(key, val);
     }
 
-    public void buildEnvVars(AbstractBuild<?,?> build, EnvVars env) {
+    public void buildEnvVars(Run<?,?> build, EnvVars env) {
         if (data!=null) env.putAll(data);
     }
 
